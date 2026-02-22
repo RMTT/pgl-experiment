@@ -2,10 +2,7 @@ import sys
 import os
 import argparse
 import importlib
-
-# Add project root to path
-sys.path.append(os.getcwd())
-sys.path.append("/home/mt/Projects/pglearned/frameworks/python")
+from pgl.server import run_server
 
 from pglexp.base import ModelServingAdapter
 
@@ -49,7 +46,7 @@ if __name__ == "__main__":
     mod = get_model_module(args.model)
 
     if args.command == "train":
-        # We can try to find a class ending with "Trainer" or "Inference" in the module
+        # We can try to find a class ending with "Trainer" or "Inferencer" in the module
         trainer_class = getattr(mod, f"{args.model.upper()}Trainer", None)
         if not trainer_class:
             print(f"No Trainer class found in pglexp/{args.model.lower()}.py")
@@ -65,37 +62,16 @@ if __name__ == "__main__":
         )
 
     elif args.command == "serve":
-        inference_class = getattr(mod, f"{args.model.upper()}Inference", None)
+        inference_class = getattr(mod, f"{args.model.upper()}Inferencer", None)
         if not inference_class:
-            # Fallback: look for any BaseInference subclass
-            import inspect
-            from pglexp.base import BaseInference
-
-            for name, obj in inspect.getmembers(mod):
-                if (
-                    inspect.isclass(obj)
-                    and issubclass(obj, BaseInference)
-                    and obj is not BaseInference
-                ):
-                    inference_class = obj
-                    break
-
-            try:
-                from pgl import run_server
-            except ImportError:
-                print("pgl not installed.")
-                sys.exit(1)
-
-        if not inference_class:
-            print(f"No Inference class found in pglexp/{args.model.lower()}.py")
+            print(f"No Inferencer class found in pglexp/{args.model.lower()}.py")
             sys.exit(1)
 
         print(f"Using inference engine: {inference_class.__name__}")
         inference = inference_class()
 
         # Load model artifacts
-        # Assuming they are stored in 'models' dir
-        inference.load("models")
+        inference.load("saved_models")
 
         adapter = ModelServingAdapter(inference)
         run_server(adapter, host=args.host, port=args.port)

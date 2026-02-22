@@ -4,8 +4,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch_geometric.loader import DataLoader
-from tqdm import tqdm
-from pglexp.base import BaseTrainer, BaseInference
+from pglexp.base import BaseTrainer, BaseInferencer
 
 from models.GNTO.models.DataPreprocessor import (
     DataPreprocessor,
@@ -19,6 +18,41 @@ from models.GNTO.models.TrainAndEval import (
 from models.GNTO.models.NodeEncoder import NodeEncoder_V4
 from models.GNTO.models.TreeEncoder import GATv2TreeEncoder_V3
 from models.GNTO.models.PredictionHead import PredictionHead_V2
+
+
+def _extract_plan_features(plan_roots, node_type_map):
+    """Common logic for extracting features from plan trees into flat node lists."""
+    processed_plans = []
+    for root in plan_roots:
+        nodes = []
+
+        def dfs(node):
+            nodes.append(
+                {
+                    "node_type_id": node_type_map.get(node.node_type, 0),
+                    "plan_rows": np.log1p(float(node.extra_info.get("Plan Rows", 0))),
+                    "plan_width": np.log1p(float(node.extra_info.get("Plan Width", 0))),
+                    "predicate_list_processed": [],
+                }
+            )
+            for c in node.children:
+                dfs(c)
+
+        dfs(root)
+        processed_plans.append(nodes)
+    return processed_plans
+
+
+class GNTOModel(nn.Module):
+    def __init__(self, num_types, num_cols, num_ops):
+        super().__init__()
+        self.preprocessor = DataPreprocessor()
+        self.enc = NodeEncoder_V4(num_types, num_cols, num_ops, 16, 2, 64, 64)
+        self.tree = GATv2TreeEncoder_V3(64, 64, 64, 4, 2, 0.1)
+        self.head = PredictionHead_V2(64, 1, (64, 64))
+
+    def forward(self, d):
+        return torch.sigmoid(self.head(self.tree(self.enc(d.x), d.edge_index, d.batch)))
 
 
 class GNTOTrainer(BaseTrainer):
@@ -58,7 +92,7 @@ class GNTOTrainer(BaseTrainer):
         # 2. Preprocess
         preprocessor = DataPreprocessor()
         print("Converting JSON to PlanNode trees...")
-        plan_roots = [preprocessor.preprocess(p) for p in raw_plans]
+        plan_roots = preprocessor.preprocess_all(raw_plans)
 
         # 3. Initialize Metadata & Model
         print("Initializing metadata and model...")
@@ -81,19 +115,6 @@ class GNTOTrainer(BaseTrainer):
         if times_log:
             max_time_log = max(times_log)
 
-        # Define Model Class locally or helper
-        class GNTOModel(nn.Module):
-            def __init__(self, num_types, num_cols, num_ops):
-                super().__init__()
-                self.enc = NodeEncoder_V4(num_types, num_cols, num_ops, 16, 2, 64, 64)
-                self.tree = GATv2TreeEncoder_V3(64, 64, 64, 4, 2, 0.1)
-                self.head = PredictionHead_V2(64, 1, (64, 64))
-
-            def forward(self, d):
-                return torch.sigmoid(
-                    self.head(self.tree(self.enc(d.x), d.edge_index, d.batch))
-                )
-
         model = GNTOModel(len(node_types), len(col_map) + 100, len(op_map) + 10).to(
             device
         )
@@ -101,7 +122,7 @@ class GNTOTrainer(BaseTrainer):
         crit = nn.MSELoss()
 
         # Save metadata immediately
-        save_dir = "models"
+        save_dir = "saved_models"
         os.makedirs(save_dir, exist_ok=True)
         meta_path = os.path.join(save_dir, "GNTO_meta.json")
         with open(meta_path, "w") as f:
@@ -120,29 +141,8 @@ class GNTOTrainer(BaseTrainer):
 
         # 4. Build Graphs & Features
         print("Building graphs and features...")
-        edges_list, _ = plan_trees_to_graphs(plan_roots)
-        processed_plans = []
-        for root in tqdm(plan_roots, desc="Processing"):
-            nodes = []
-
-            def dfs(node):
-                nodes.append(
-                    {
-                        "node_type_id": node_type_map.get(node.node_type, 0),
-                        "plan_rows": np.log1p(
-                            float(node.extra_info.get("Plan Rows", 0))
-                        ),
-                        "plan_width": np.log1p(
-                            float(node.extra_info.get("Plan Width", 0))
-                        ),
-                        "predicate_list_processed": [],
-                    }
-                )
-                for c in node.children:
-                    dfs(c)
-
-            dfs(root)
-            processed_plans.append(nodes)
+        edges_list, nodes_list = plan_trees_to_graphs(plan_roots)
+        processed_plans = _extract_plan_features(plan_roots, node_type_map)
 
         # 5. Build Dataset
         print("Building PyG dataset...")
@@ -177,7 +177,7 @@ class GNTOTrainer(BaseTrainer):
         print(f"Final model saved to {save_path}")
 
 
-class GNTOInference(BaseInference):
+class GNTOInferencer(BaseInferencer):
     def __init__(self):
         self.model = None
         self.metadata = None
@@ -199,25 +199,12 @@ class GNTOInference(BaseInference):
         with open(meta_path, "r") as f:
             self.metadata = json.load(f)
 
-        self.DataPreprocessor = DataPreprocessor
         self.plan_trees_to_graphs = plan_trees_to_graphs
         self.build_dataset = build_dataset
 
         num_types = len(self.metadata["node_types"])
         num_cols = len(self.metadata["col_map"])
         num_ops = len(self.metadata["op_map"])
-
-        class GNTOModel(nn.Module):
-            def __init__(self, num_types, num_cols, num_ops):
-                super().__init__()
-                self.enc = NodeEncoder_V4(num_types, num_cols, num_ops, 16, 2, 64, 64)
-                self.tree = GATv2TreeEncoder_V3(64, 64, 64, 4, 2, 0.1)
-                self.head = PredictionHead_V2(64, 1, (64, 64))
-
-            def forward(self, d):
-                return torch.sigmoid(
-                    self.head(self.tree(self.enc(d.x), d.edge_index, d.batch))
-                )
 
         print(f"Loading model from {model_path}...")
         self.model = GNTOModel(num_types, num_cols + 100, num_ops + 10).to(self.device)
@@ -226,34 +213,12 @@ class GNTOInference(BaseInference):
 
     def predict(self, plans: list) -> list[float]:
         # Preprocessing
-        preprocessor = self.DataPreprocessor()
+        preprocessor = self.model.preprocessor
         plan_roots = [preprocessor.preprocess(p) for p in plans]
         edges_list, _ = self.plan_trees_to_graphs(plan_roots)
 
-        processed_plans = []
         node_type_map = self.metadata["node_type_map"]
-
-        for root in plan_roots:
-            nodes = []
-
-            def dfs(node):
-                nodes.append(
-                    {
-                        "node_type_id": node_type_map.get(node.node_type, 0),
-                        "plan_rows": np.log1p(
-                            float(node.extra_info.get("Plan Rows", 0))
-                        ),
-                        "plan_width": np.log1p(
-                            float(node.extra_info.get("Plan Width", 0))
-                        ),
-                        "predicate_list_processed": [],
-                    }
-                )
-                for c in node.children:
-                    dfs(c)
-
-            dfs(root)
-            processed_plans.append(nodes)
+        processed_plans = _extract_plan_features(plan_roots, node_type_map)
 
         times = [0.0] * len(processed_plans)
         dataset = self.build_dataset(

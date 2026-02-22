@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import numpy as np
-import os
 import json
+from pgl import PglAdapter
 
 
 class BaseTrainer(ABC):
@@ -64,7 +64,7 @@ class BaseTrainer(ABC):
             return None
 
 
-class BaseInference(ABC):
+class BaseInferencer(ABC):
     """
     Abstract base class for model inference.
     """
@@ -94,21 +94,12 @@ class BaseInference(ABC):
         pass
 
 
-# Try to import PglAdapter, define dummy if missing (for dev environments without pgl)
-try:
-    from pgl import PglAdapter
-except ImportError:
-
-    class PglAdapter:
-        pass
-
-
 class ModelServingAdapter(PglAdapter):
     """
-    Generic adapter that wraps a BaseInference implementation for the pglearned server.
+    Generic adapter that wraps a BaseInferencer implementation for the pglearned server.
     """
 
-    def __init__(self, inference_engine: BaseInference):
+    def __init__(self, inference_engine: BaseInferencer):
         self.inference = inference_engine
 
     def choose_plan(self, plans: list, query: str = None) -> int:

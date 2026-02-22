@@ -1,0 +1,27 @@
+{
+  "node_types": [
+    "Aggregate",
+    "Limit",
+    "Seq Scan",
+    "Sort"
+  ],
+  "max_time_log": 0.032467190137501496,
+  "node_type_map": {
+    "Aggregate": 0,
+    "Limit": 1,
+    "Seq Scan": 2,
+    "Sort": 3
+  },
+  "col_map": {
+    "UNKNOWN": 0
+  },
+  "op_map": {
+    "=": 0,
+    ">": 1,
+    ">=": 2,
+    "<": 3,
+    "<=": 4,
+    "!=": 5,
+    "<>": 5
+  }
+}
