@@ -1,0 +1,3 @@
+[submodule "models/GNTO"]
+	path = models/GNTO
+	url = https://github.com/AiChaosN/GNTO.git
