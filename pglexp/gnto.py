@@ -179,9 +179,9 @@ class GNTOTrainer(BaseTrainer):
 
 class GNTOInferencer(BaseInferencer):
     def __init__(self):
-        self.model = None
-        self.metadata = None
-        self.device = None
+        self.model: GNTOModel | None = None
+        self.metadata: dict | None = None
+        self.device: torch.device | None = None
 
     def load(self, model_dir: str, device: str = "cpu"):
         self.device = torch.device(device)
